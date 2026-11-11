@@ -1,0 +1,15 @@
+{
+  "name": "cold-open",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Daily guide to new TV episodes. Static site for Cloudflare Pages, listings from the TVmaze API.",
+  "scripts": {
+    "build": "node tools/build.mjs",
+    "daily": "node tools/build.mjs --daily",
+    "test": "node tests/unit.mjs && node tests/site.mjs",
+    "test:e2e": "node tests/e2e.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
