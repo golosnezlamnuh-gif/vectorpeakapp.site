@@ -1,0 +1,32 @@
+<!--{"title":"How it works: sources, picks and corrections","description":"Where {{siteName}} gets its TV listings, how episodes are chosen for briefs, how premieres are flagged, and how to report a mistake.","path":"/how-it-works/","page":"how","nav":"","robots":"index,follow","ads":false,"api":false}-->
+<main id="main" class="page"><article class="prose">
+<h1>How {{siteName}} works</h1>
+<p class="lead">Everything on this site is computed from public TV listings. This page explains where the data comes from, what the labels mean and how featured episodes are chosen.</p>
+<h2>Where the listings come from</h2>
+<p>Schedules, show details, cast and episode lists come from <a href="https://www.tvmaze.com/" rel="noopener">TVmaze</a>, a community-edited TV database, through its public API. TVmaze data is available under the <a href="https://creativecommons.org/licenses/by-sa/4.0/" rel="noopener">Creative Commons Attribution-ShareAlike 4.0 licence</a>. Episode descriptions are shortened for display. Show pages and other days load straight from TVmaze when you open them, so they are as current as TVmaze is.</p>
+<!--if:archive--><p>The front page and the <a href="/day/">daily archive</a> also use a saved copy that is refreshed once a day. A saved copy can be a few hours behind, which is why the page checks the time on your device before it marks anything as "on air".</p><!--endif:archive-->
+<!--if:noarchive--><p>The front page loads straight from TVmaze too, and the page checks the time on your device before it marks anything as "on air".</p><!--endif:noarchive-->
+<h2>What counts as a new episode</h2>
+<p>An episode is listed under the day it first airs in the schedule of its broadcaster. That is TVmaze's calendar, not a rerun guide. Streaming releases appear under their release date, and some have no fixed time, so they sit under "All day". Only English-language shows are included. Talk shows, news, sports, game shows and variety shows are hidden by default. You can show them with the checkbox above the timetable.</p>
+<h2>Days and time zones</h2>
+<p>The day tabs follow the broadcast calendar of the region you pick. Times are converted to the time zone of your device. If an episode airs on a different calendar day where you are, the time carries a small day label, such as Wed.</p>
+<h2>What the labels mean</h2>
+<ul>
+<li><strong>Series premiere</strong>: the first episode of a show's first season.</li>
+<li><strong>Season premiere</strong>: the first episode of a later season.</li>
+<li><strong>Special</strong>: an episode TVmaze marks as a special rather than a regular episode.</li>
+<li><strong>On air</strong>: the start time has passed and the listed running time has not yet ended.</li>
+</ul>
+<h2>How briefs are chosen</h2>
+<p>Each day, roughly one in five episodes gets an expanded brief, with a minimum of three and a maximum of twelve. Episodes are ranked by a score that adds three things:</p>
+<ul>
+<li>the show's TVmaze popularity score, from 0 to 100;</li>
+<li>a bonus of 25 for a series premiere or 12 for a season premiere;</li>
+<li>4 points for every rating point above 6, using the episode rating if it exists and the show rating otherwise.</li>
+</ul>
+<p>A small extra is added when an episode description exists. Nobody pays to be featured, and advertising has no influence on the ranking. The summary paragraph at the top of each day is built from counts and names in the same data: how many episodes and shows, which series and seasons premiere, the busiest start time and the most popular show.</p>
+<h2>Corrections</h2>
+<p>If a listing is wrong, tell us on the <a href="/contact/">contact page</a>. Details such as air dates, descriptions and cast are edited by the TVmaze community, so a fix at the source also corrects it here.</p>
+<h2>Advertising</h2>
+<p>{{siteName}} <!--if:ads-->shows ads from Google AdSense. Every ad is labelled "Advertisement", sits apart from the listings and never appears on loading, empty or error screens.<!--endif:ads--><!--if:noads-->is free to read and may show advertising in the future. Any ad will be clearly labelled "Advertisement" and kept apart from the listings.<!--endif:noads--></p>
+</article></main>

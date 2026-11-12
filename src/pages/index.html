@@ -1,0 +1,23 @@
+<!--{"title":"{{siteName}}: daily guide to new TV episodes","titleRaw":true,"description":"What is new on TV and streaming today, with air times in your time zone. Short briefs for the day's new episodes, premieres and finales across the US, UK, Canada and Australia.","path":"/","page":"home","nav":"today","robots":"index,follow","ads":true,"api":true}-->
+<div class="nextbar" role="region" aria-label="Next on air"><div class="wrap nextbar-in" id="nextbar-in"><p class="nextbar-note">Times are shown in your time zone.</p></div></div>
+<main id="main" class="wrap layout">
+  <div class="col-main">
+    <header class="top">
+      <h1 id="h1"><!--@h1--></h1>
+      <p class="dek" id="dek"><!--@dek--></p><!--@note-->
+    </header>
+    <div class="ctl" id="ctl" hidden>
+      <div class="dates" id="dates" role="group" aria-label="Choose a day"></div>
+      <div class="ctl-row">
+        <div class="seg" id="region" role="group" aria-label="Region"></div>
+        <label class="chk"><input type="checkbox" id="chatter"> Include talk, news and sports</label>
+      </div>
+      <div class="chips" id="chips" role="group" aria-label="Filter the schedule"></div>
+      <p class="ctl-note" id="ctl-note"></p>
+    </div>
+    <div id="feed" aria-live="polite"<!--@feedattrs-->><!--@feed--></div>
+    <noscript><div class="state"><h2>Turn on JavaScript to switch days and regions</h2><p>The schedule above is the latest saved copy. Switching days, regions and filters needs JavaScript.<!--@archivelink--></p></div></noscript>
+  </div>
+  <aside class="col-side" id="side"><section class="side-box" id="side-follow" hidden></section><section class="side-box" id="side-picks"><!--@sidepicks--></section></aside>
+</main>
+<!--@snapshot-->
