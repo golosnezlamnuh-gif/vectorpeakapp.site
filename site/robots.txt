@@ -1,4 +1,4 @@
 User-agent: *
 Allow: /
 
-Sitemap: https://vectorpeakapp.site/sitemap.xml
+Sitemap: https://tv.vectorpeakapp.site/sitemap.xml
