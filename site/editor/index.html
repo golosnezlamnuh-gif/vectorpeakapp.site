@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Editor&#39;s desk | Cold Open</title>
+<meta name="description" content="Private workbench for the editor of Cold Open: load the day&#39;s facts, prepare AI prompts and check drafts before publishing.">
+<link rel="canonical" href="https://tv.vectorpeakapp.site/editor/">
+<meta name="robots" content="noindex,nofollow">
+<meta name="color-scheme" content="light">
+<meta name="theme-color" content="#1d2bd8">
+<link rel="icon" href="/assets/img/favicon.svg?v=a352437c" type="image/svg+xml">
+<link rel="preload" href="/assets/fonts/archivo-latin-wdth-normal.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="/assets/fonts/literata-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preconnect" href="https://api.tvmaze.com" crossorigin>
+<link rel="preconnect" href="https://static.tvmaze.com">
+<link rel="stylesheet" href="/assets/css/site.css?v=352dd461">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Cold Open">
+<link rel="alternate" type="application/atom+xml" title="Cold Open: guides and editor's notes" href="/feed.xml">
+<meta property="og:title" content="Editor&#39;s desk | Cold Open">
+<meta property="og:description" content="Private workbench for the editor of Cold Open: load the day&#39;s facts, prepare AI prompts and check drafts before publishing.">
+<meta property="og:url" content="https://tv.vectorpeakapp.site/editor/">
+<meta name="twitter:card" content="summary">
+</head>
+<body data-page="editor">
+<a class="skip" href="#main">Skip to content</a>
+<header class="mast"><div class="mast-in"><a class="brand" href="/" aria-label="Cold Open, home"><i class="tally" aria-hidden="true"></i>Cold Open</a><nav class="nav" aria-label="Main"><a href="/">Today</a><a href="/premieres/">Premieres</a><a href="/watchlist/">My shows</a><a href="/search/">Search</a></nav><p class="clock" id="clock" title="Your local time"></p></div></header>
+<main id="main" class="page"><div class="desk">
+<header class="top">
+<h1>Editor's desk</h1>
+<p class="dek">A workbench for the daily routine. It loads the real schedule, prepares the prompt for your AI assistant and checks the result before you publish. Everything runs in this browser. The only outside request is the schedule request to TVmaze. This page is hidden from search engines and is not linked from the site.</p>
+</header>
+
+<section class="desk-card" aria-labelledby="d1">
+<h2 id="d1">1. Load the facts</h2>
+<p>AI assistants make up details unless they are given real ones. Load the schedule first, and it goes into the prompt for you.</p>
+<div class="desk-row">
+<label>Date (US Eastern)<input type="date" id="d-date"></label>
+<button type="button" class="btn btn--solid" id="load-day">Load this day</button>
+<button type="button" class="btn" id="load-week">Load 7 days from this date</button>
+</div>
+<p class="desk-status" id="d-status" role="status" aria-live="polite"></p>
+<div class="desk-row">
+<label class="grow">Facts for the day<textarea id="facts-day" rows="9" spellcheck="false" placeholder="Press &quot;Load this day&quot;."></textarea></label>
+<label class="grow">Facts for the week<textarea id="facts-week" rows="9" spellcheck="false" placeholder="Press &quot;Load 7 days from this date&quot;."></textarea></label>
+</div>
+</section>
+
+<section class="desk-card" aria-labelledby="d2">
+<h2 id="d2">2. Get the prompt</h2>
+<p id="tpl-help">Pick what you want to write. Fill in the boxes that appear, copy the prompt and paste it into your AI assistant.</p>
+<div class="desk-row"><label class="grow">What do you want to write?<select id="tpl"></select></label></div>
+<div id="fields"></div>
+<label>Prompt to paste into the assistant<textarea id="prompt" class="tall" readonly spellcheck="false"></textarea></label>
+<div class="desk-row"><button type="button" class="btn btn--solid" id="copy-prompt">Copy prompt</button><span class="desk-meta" id="prompt-meta"></span></div>
+</section>
+
+<section class="desk-card" aria-labelledby="d3">
+<h2 id="d3">3. Check the draft</h2>
+<p>Paste what the assistant wrote, after you have fact-checked it and edited it in your own voice. The checks are the same ones the site applies when it builds, so a green result means the text will be published.</p>
+<div class="desk-row">
+<label>What is it?<select id="kind"><option value="note">Daily note (a .txt file)</option><option value="guide">Guide or weekly article (a .md file)</option></select></label>
+<label id="n-date-wrap">Day the note is for<input type="date" id="n-date"></label>
+</div>
+<label>Draft<textarea id="draft" class="tall" spellcheck="true"></textarea></label>
+<div id="report" aria-live="polite"></div>
+<div class="desk-row">
+<button type="button" class="btn" id="copy-draft">Copy text</button>
+<button type="button" class="btn" id="copy-name">Copy file name</button>
+<button type="button" class="btn" id="download">Download file</button>
+</div>
+<p class="desk-meta" id="file-name"></p>
+</section>
+
+<section class="desk-card" aria-labelledby="d4">
+<h2 id="d4">4. Publish on GitHub</h2>
+<ol class="desk-list">
+<li>Type your GitHub repository once, for example <code>your-name/your-repo</code>. This browser remembers it.</li>
+<li>Press the button to open GitHub's "new file" page. The file name is already filled in.</li>
+<li>Press "Copy text" above, paste into the big box on GitHub and press "Commit changes".</li>
+<li>Wait one or two minutes. The site rebuilds itself and the new text goes live.</li>
+</ol>
+<div class="desk-row">
+<label class="grow">GitHub repository (owner/name)<input type="text" id="repo" placeholder="your-name/your-repo" autocomplete="off" spellcheck="false"></label>
+<a class="btn btn--solid" id="gh-link" target="_blank" rel="noopener" hidden>Open GitHub's new file page</a>
+</div>
+</section>
+</div></main>
+
+<footer class="foot"><div class="foot-in"><p class="foot-brand">Cold Open</p><nav class="foot-nav" aria-label="About this site"><a href="/about/">About</a><a href="/how-it-works/">How it works</a><a href="/editorial-policy/">Editorial policy</a><a href="/notes/">Editor's notes</a><a href="/day/">Daily archive</a><a href="/privacy/">Privacy</a><a href="/terms/">Terms</a><a href="/contact/">Contact</a><a href="#" id="consent-link">Privacy and cookie settings</a></nav><p>TV listings and descriptions from <a href="https://www.tvmaze.com/" rel="noopener">TVmaze</a>, licensed under <a href="https://creativecommons.org/licenses/by-sa/4.0/" rel="noopener">CC BY-SA 4.0</a>. Cold Open is independent and is not affiliated with any network or streaming service.</p><p>&copy; 2026 Cold Open</p></div></footer>
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+<script defer src="/assets/js/config.js?v=1d70e694"></script>
+<script defer src="/assets/js/render.js?v=bc6b29e6"></script>
+<script defer src="/assets/js/ads.js?v=2e66a268"></script>
+<script defer src="/assets/js/app.js?v=da4e85c4"></script>
+<script defer src="/assets/js/brief.js?v=41755bc1"></script>
+<script defer src="/assets/js/prompts.js?v=ea8de201"></script>
+<script defer src="/assets/js/editor.js?v=fc92c110"></script>
+</body>
+</html>

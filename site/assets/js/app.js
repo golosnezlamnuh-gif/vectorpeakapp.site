@@ -708,6 +708,17 @@
     if (final) CO.ads.init($('#prem-list'));
   }
 
+  /* ---------------------------------------------------------------- guides */
+  /** One labelled ad slot after the article text, and only when a slot id is configured (or with ?adpreview=1). */
+  function initArticle() {
+    var end = $('#article-end');
+    if (!end || !(CO.ads.slotEnabled('end') || CO.ads.preview)) return;
+    var el = document.createElement('aside');
+    el.className = 'ad-slot'; el.setAttribute('data-ad', 'end'); el.setAttribute('aria-label', 'Advertisement');
+    end.parentNode.insertBefore(el, end.nextSibling);
+    CO.ads.init(end.parentNode);
+  }
+
   /* ---------------------------------------------------------------- boot */
   function boot() {
     tickClock();
@@ -725,6 +736,7 @@
     else if (PAGE === 'search') initSearch();
     else if (PAGE === 'watchlist') renderWatchlist();
     else if (PAGE === 'premieres') initPremieres();
+    else if (PAGE === 'guide') initArticle();
   }
   boot();
 })();
