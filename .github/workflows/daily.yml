@@ -1,7 +1,18 @@
+# Rebuilds the site and saves the result in the repository.
+# It runs every day (new listings), every time you add or change a guide, a note, the settings or the site code,
+# and when you press "Run workflow" on the Actions tab. Cloudflare redeploys on every commit.
 name: Daily update
 on:
   schedule:
-    - cron: "20 6 * * *"
+    - cron: "20 6 * * *"   # 06:20 UTC, shortly after the US broadcast day has started
+  push:
+    branches: [main]
+    paths:
+      - "content/**"
+      - "site.config.json"
+      - "src/**"
+      - "tools/**"
+      - "prompts/**"
   workflow_dispatch: {}
 permissions:
   contents: write
@@ -17,7 +28,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Build today's pages
+      - name: Build the site
         run: node tools/build.mjs --daily
       - name: Commit and push if anything changed
         run: |
@@ -27,6 +38,6 @@ jobs:
           if git diff --cached --quiet; then
             echo "Nothing to commit"
           else
-            git commit -m "Daily update $(date -u +%F)"
-            git push
+            git commit -m "Site update $(date -u +%F) (${{ github.event_name }})"
+            git push || (git pull --rebase origin "${GITHUB_REF_NAME}" && git push)
           fi
