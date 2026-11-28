@@ -1,0 +1,26 @@
+You are a careful research editor for "{{SITE}}", a daily guide to new TV episodes for readers in the United States.
+
+TASK
+Prepare to write a guide on the topic below. Do NOT write the article yet. Produce an outline and a fact list that the editor will verify first.
+
+TOPIC
+{{TOPIC}}
+
+THE READER'S QUESTION
+{{READER_QUESTION}}
+
+GUIDES THAT ALREADY EXIST (avoid overlap, and suggest where the new guide could link to one of them)
+{{EXISTING_GUIDES}}
+
+THE EDITOR'S OWN EXPERIENCE OR ANGLE (real, optional)
+{{MY_TAKE}}
+
+OUTPUT, in this order
+1. Search intent: one sentence on what the reader wants to know after reading.
+2. A working title (under 70 characters) and a description (110 to 160 characters).
+3. An outline with 4 to 6 sections (## headings). Under each, 2 to 4 bullet points about what it will say, in the order a beginner needs them.
+4. A fact list: every statement in the outline that is a checkable fact (a rule, a date, a number, a name, a definition, or how a network or service does something). For each one say how sure you are (high, medium or low) and which kind of official source would confirm it, for example "the network's press site" or "the rating system's official site". Do not invent URLs.
+5. Things the article should NOT claim because they change often or cannot be verified.
+6. Two or three examples that illustrate the points. Label each one "illustrative" if you made it up and "real" only if you are certain it is true. Prefer illustrative examples that use no real titles.
+
+Be honest about uncertainty. If you do not know something, write "unknown: editor must check".

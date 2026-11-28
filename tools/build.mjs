@@ -10,6 +10,8 @@
  *          --config FILE       config file (default: site.config.json)
  *          --fixtures FILE     offline test data (a module exporting scheduleUS/webUS/webGlobal), used by the tests
  *          --notes DIR         folder with editor's notes, one YYYY-MM-DD.txt per day (default: content/notes)
+ *          --guides DIR        folder with guides, one Markdown file each (default: content/guides)
+ *          --prompts DIR       folder with the AI prompt templates used by the /editor/ page (default: prompts)
  *          --no-premieres      skip the 14-day premieres fetch
  *          --allow-empty       accept a suspiciously empty day instead of aborting
  */
@@ -18,6 +20,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createRequire } from 'node:module';
+import { loadGuides, loadNotes, PLACEHOLDERS, CHATBOT_LEFTOVERS } from './content.mjs';
 
 const require = createRequire(import.meta.url);
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -28,7 +31,8 @@ const args = process.argv.slice(2);
 const flag = (n) => args.includes('--' + n);
 const opt = (n, d) => { const i = args.indexOf('--' + n); return i >= 0 && args[i + 1] && !args[i + 1].startsWith('--') ? args[i + 1] : d; };
 const warnings = [];
-const warn = (m) => { warnings.push(m); console.warn('  warning: ' + m); };
+// On GitHub Actions a line starting with "::warning::" also shows up as a yellow notice on the run's summary page.
+const warn = (m) => { warnings.push(m); console.warn('  warning: ' + m); if (process.env.GITHUB_ACTIONS) console.log('::warning::' + m.replace(/\r?\n/g, ' ')); };
 const die = (m) => { console.error('\nBuild failed: ' + m); process.exit(1); };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -40,7 +44,7 @@ const ET = T.REGIONS.US.tz;
 /* ------------------------------------------------------------------ config */
 const DEFAULTS = {
   siteName: 'Cold Open', tagline: 'Every new TV episode of the day, in a few lines.', siteUrl: 'https://example.com',
-  contactEmail: 'hello@example.com', editorName: 'the Cold Open editor', defaultRegion: 'US',
+  contactEmail: 'hello@example.com', editorName: 'the Cold Open editor', editorBio: '', aiAssisted: true, defaultRegion: 'US',
   adsense: { publisherId: '', slots: { side: '', feed: '', end: '' } }
 };
 const merge = (a, b) => {
@@ -82,10 +86,12 @@ const buildDate = new Date();
 const todayEt = opt('date', T.ymdIn(ET, buildDate));
 if (!T.isYmd(todayEt)) die('--date must look like 2026-11-10');
 const vars = {
-  siteName: cfg.siteName, tagline: cfg.tagline, siteUrl: cfg.siteUrl, contactEmail: cfg.contactEmail, editorName: cfg.editorName,
+  siteName: cfg.siteName, tagline: cfg.tagline, siteUrl: cfg.siteUrl, contactEmail: cfg.contactEmail, editorName: cfg.editorName, editorBio: String(cfg.editorBio || '').trim(),
   year: String(buildDate.getUTCFullYear()), date: T.fmtDateLong(buildDate.toISOString().slice(0, 10))
 };
-const flags = { ads: !!cfg.pub, noads: !cfg.pub, archive: false, noarchive: true }; // archive flags are set once we know whether /day/ exists
+const aiOn = cfg.aiAssisted !== false;
+// archive / guides / notes flags are set once we know what exists
+const flags = { ads: !!cfg.pub, noads: !cfg.pub, archive: false, noarchive: true, guides: false, noguides: true, notes: false, nonotes: true, bio: !!vars.editorBio, nobio: !vars.editorBio, ai: aiOn, noai: !aiOn };
 function template(text) {
   return text
     .replace(/<!--if:(\w+)-->([\s\S]*?)<!--endif:\1-->/g, (_, k, inner) => (flags[k] ? inner : ''))
@@ -141,16 +147,35 @@ async function fetchDayRows(date) {
 }
 const slim = (a) => ({ ...a, summary: U.clip(a.summary, 300), about: a.summary ? '' : U.clip(a.about, 240) });
 
-/** Optional editor's note for a day: content/notes/YYYY-MM-DD.txt, plain text, blank line = new paragraph. Escaped, max 4 paragraphs and 1,500 characters. */
+/* ------------------------------------------------------------------ the editor's own content (see tools/content.mjs for the publishing rules) */
 const NOTES = path.resolve(ROOT, opt('notes', 'content/notes'));
-function readNote(date) {
-  const f = path.join(NOTES, date + '.txt');
-  if (!fs.existsSync(f)) return '';
-  const paras = fs.readFileSync(f, 'utf8').replace(/\r/g, '').split(/\n\s*\n/).map((p) => p.replace(/\s+/g, ' ').trim()).filter(Boolean).slice(0, 4);
-  let left = 1500; const out = [];
-  for (const p of paras) { if (left <= 40) break; out.push(U.clip(p, left)); left -= p.length; }
-  if (paras.join('').length > 1500) warn(`${path.relative(ROOT, f)} is longer than 1,500 characters. Only the beginning is shown.`);
-  return out.length ? `<aside class="note" id="note" data-date="${date}"><h2>Editor's note</h2>${out.map((p) => `<p>${esc(p)}</p>`).join('')}</aside>` : '';
+const GUIDES = path.resolve(ROOT, opt('guides', 'content/guides'));
+const PROMPTS = path.resolve(ROOT, opt('prompts', 'prompts'));
+const relPath = (f) => path.relative(ROOT, f).split(path.sep).join('/');
+let notes = [], guides = [];
+const notesByDate = new Map();
+const fmtDate = (ymd) => new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', year: 'numeric', month: 'long', day: 'numeric' }).format(new Date(ymd + 'T00:00:00Z'));
+const fmtDateShort = (ymd) => new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', year: 'numeric', month: 'short', day: 'numeric' }).format(new Date(ymd + 'T00:00:00Z'));
+const STATIC_PATHS = ['/', '/premieres/', '/about/', '/how-it-works/', '/editorial-policy/', '/contact/', '/privacy/', '/terms/', '/search/', '/watchlist/'];
+function loadContent() {
+  notes = loadNotes(NOTES, { today: todayEt, warn, clip: U.clip, rel: relPath });
+  notesByDate.clear(); notes.forEach((n) => notesByDate.set(n.date, n));
+  const known = (p) => STATIC_PATHS.includes(p) || p === '/guides/' || (p === '/notes/' && notes.length > 0) ||
+    (hasArchive && (p === '/day/' || /^\/day\/\d{4}-\d{2}-\d{2}\/$/.test(p) && (fs.existsSync(path.join(OUT, p.slice(1), 'index.html')) || (DAILY && p === `/day/${todayEt}/`))));
+  const g = loadGuides(GUIDES, { today: todayEt, warn, rel: relPath, isKnownPath: known });
+  guides = g.guides;
+  flags.guides = guides.length > 0; flags.noguides = !flags.guides;
+  flags.notes = notes.length > 0; flags.nonotes = !flags.notes;
+  const bits = [`${guides.length} guide${guides.length === 1 ? '' : 's'} published`];
+  if (g.stats.scheduled) bits.push(`${g.stats.scheduled} scheduled for later`);
+  if (g.stats.draft) bits.push(`${g.stats.draft} draft${g.stats.draft === 1 ? '' : 's'}`);
+  if (g.stats.rejected) bits.push(`${g.stats.rejected} held back (see warnings)`);
+  console.log(`  content: ${bits.join(', ')}; ${notes.length} editor's note${notes.length === 1 ? '' : 's'}`);
+}
+/** The note for one day, as it appears on the front page and on that day's permanent page. */
+function noteAside(date) {
+  const n = notesByDate.get(date);
+  return n ? `<aside class="note" id="note" data-date="${date}"><h2>Editor's note</h2>${n.paras.map((p) => `<p>${esc(p)}</p>`).join('')}</aside>` : '';
 }
 
 /* ------------------------------------------------------------------ page chrome */
@@ -158,7 +183,8 @@ let hasArchive = DAILY || fs.existsSync(path.join(OUT, 'day', 'index.html'));
 flags.archive = hasArchive; flags.noarchive = !hasArchive;
 const assetHash = {};
 const asset = (p) => `${p}${assetHash[p] ? '?v=' + assetHash[p] : ''}`;
-const NAV = [['today', '/', 'Today'], ['premieres', '/premieres/', 'Premieres'], ['watchlist', '/watchlist/', 'My shows'], ['search', '/search/', 'Search']];
+const navItems = () => [['today', '/', 'Today'], ['premieres', '/premieres/', 'Premieres'], ...(flags.guides ? [['guides', '/guides/', 'Guides']] : []), ['watchlist', '/watchlist/', 'My shows'], ['search', '/search/', 'Search']];
+let hasFeed = false;
 
 function headHtml(meta) {
   const title = meta.titleRaw ? meta.title : `${meta.title} | ${cfg.siteName}`;
@@ -177,7 +203,10 @@ function headHtml(meta) {
     '<link rel="preload" href="/assets/fonts/literata-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>',
     meta.api ? '<link rel="preconnect" href="https://api.tvmaze.com" crossorigin>\n<link rel="preconnect" href="https://static.tvmaze.com">' : '',
     `<link rel="stylesheet" href="${asset('/assets/css/site.css')}">`,
-    '<meta property="og:type" content="website">', `<meta property="og:site_name" content="${esc(cfg.siteName)}">`,
+    `<meta property="og:type" content="${meta.ogType || 'website'}">`, `<meta property="og:site_name" content="${esc(cfg.siteName)}">`,
+    meta.published ? `<meta property="article:published_time" content="${esc(meta.published)}">` : '',
+    meta.modified ? `<meta property="article:modified_time" content="${esc(meta.modified)}">` : '',
+    hasFeed ? `<link rel="alternate" type="application/atom+xml" title="${esc(cfg.siteName)}: guides and editor's notes" href="/feed.xml">` : '',
     `<meta property="og:title" content="${esc(title)}">`, `<meta property="og:description" content="${esc(meta.description)}">`,
     `<meta property="og:url" content="${esc(url)}">`,
     hasOg ? `<meta property="og:image" content="${esc(cfg.siteUrl)}/assets/img/og.png">` : '',
@@ -189,12 +218,13 @@ function headHtml(meta) {
 }
 function headerHtml(nav) {
   return `<header class="mast"><div class="mast-in"><a class="brand" href="/" aria-label="${esc(cfg.siteName)}, home"><i class="tally" aria-hidden="true"></i>${esc(cfg.siteName)}</a>` +
-    `<nav class="nav" aria-label="Main">${NAV.map(([k, h, l]) => `<a href="${h}"${k === nav ? ' aria-current="page"' : ''}>${l}</a>`).join('')}</nav>` +
+    `<nav class="nav" aria-label="Main">${navItems().map(([k, h, l]) => `<a href="${h}"${k === nav ? ' aria-current="page"' : ''}>${l}</a>`).join('')}</nav>` +
     '<p class="clock" id="clock" title="Your local time"></p></div></header>';
 }
 function footerHtml() {
   return `<footer class="foot"><div class="foot-in"><p class="foot-brand">${esc(cfg.siteName)}</p>` +
-    '<nav class="foot-nav" aria-label="About this site"><a href="/about/">About</a><a href="/how-it-works/">How it works</a>' +
+    '<nav class="foot-nav" aria-label="About this site"><a href="/about/">About</a><a href="/how-it-works/">How it works</a><a href="/editorial-policy/">Editorial policy</a>' +
+    (flags.guides ? '<a href="/guides/">Guides</a>' : '') + (flags.notes ? '<a href="/notes/">Editor\'s notes</a>' : '') +
     (hasArchive ? '<a href="/day/">Daily archive</a>' : '') +
     '<a href="/privacy/">Privacy</a><a href="/terms/">Terms</a><a href="/contact/">Contact</a>' +
     (cfg.pub ? '<a href="#" id="consent-link">Privacy and cookie settings</a>' : '') + '</nav>' +
@@ -205,7 +235,7 @@ function footerHtml() {
 function pageHtml(meta, main) {
   return [headHtml(meta), `<body data-page="${esc(meta.page)}">`, '<a class="skip" href="#main">Skip to content</a>', headerHtml(meta.nav), main, footerHtml(),
     '<div id="toast" class="toast" role="status" aria-live="polite"></div>',
-    ['/assets/js/config.js', '/assets/js/render.js', '/assets/js/ads.js', '/assets/js/app.js'].map((s) => `<script defer src="${asset(s)}"></script>`).join('\n'),
+    ['/assets/js/config.js', '/assets/js/render.js', '/assets/js/ads.js', '/assets/js/app.js', ...(meta.scripts || [])].map((s) => `<script defer src="${asset(s)}"></script>`).join('\n'),
     '</body>', '</html>', ''].join('\n');
 }
 const outPath = (p) => (p === '/' ? 'index.html' : p.endsWith('.html') ? p.slice(1) : p.slice(1) + 'index.html');
@@ -265,12 +295,12 @@ function dayPageHtml(date, data, prevDate) {
   };
   const main = '<div class="nextbar" role="region" aria-label="Next on air"><div class="wrap nextbar-in" id="nextbar-in"><p class="nextbar-note">Times are shown in your time zone.</p></div></div>' +
     '<main id="main" class="wrap layout"><div class="col-main"><header class="top">' +
-    `<h1>New TV episodes on ${esc(long)}</h1><p class="dek">${data.digest.html}</p>${readNote(date)}</header>` +
+    `<h1>New TV episodes on ${esc(long)}</h1><p class="dek">${data.digest.html}</p>${noteAside(date)}</header>` +
     '<nav class="ctl" aria-label="Browse other days"><div class="tools">' +
     `<a class="btn btn--solid" href="/?d=${date}">Open the live schedule</a>` +
     (prevDate ? `<a class="btn btn--ghost" href="/day/${prevDate}/">Previous day</a>` : '') +
     '<a class="btn btn--ghost" href="/day/">All days</a></div></nav>' +
-    `<div id="feed">${data.rail}</div></div><aside class="col-side" id="side"><section class="side-box" id="side-follow" hidden></section>` +
+    `<div id="feed">${data.rail}</div>${editorialBlock()}</div><aside class="col-side" id="side"><section class="side-box" id="side-follow" hidden></section>` +
     `<section class="side-box" id="side-picks">${V.picksBox(data.base, data.ctx)}</section></aside></main>`;
   return pageHtml(meta, main);
 }
@@ -304,6 +334,109 @@ function archivePageHtml(manifest) {
     `<ul class="res arch">${items}</ul></div></main>`);
 }
 
+/* ------------------------------------------------------------------ guides, notes archive, feed */
+const editorIsRole = () => /^the\s/i.test(cfg.editorName); // "the Cold Open editor" is a role, not a person's name
+const authorLd = () => (editorIsRole() ? { '@type': 'Organization', name: cfg.siteName, url: cfg.siteUrl } : { '@type': 'Person', name: cfg.editorName });
+const cardList = (items) => `<ul class="cards">${items.map((g) =>
+  `<li><a class="card-title" href="/guides/${g.slug}/">${esc(g.title)}</a><p class="card-desc">${esc(g.description)}</p>` +
+  `<p class="card-meta"><span class="card-cat">${esc(g.category)}</span> <time datetime="${g.date}">${esc(fmtDateShort(g.date))}</time>, ${g.minutes} min read</p></li>`).join('')}</ul>`;
+/** A short "from the editor" block for the front page and the day pages: the three newest guides and links to the archives. */
+function editorialBlock() {
+  if (!guides.length && !notes.length) return '';
+  return '<section class="editorial" aria-labelledby="ed-h"><h2 id="ed-h">From the editor</h2>' +
+    (guides.length ? cardList(guides.slice(0, 3)) : '') +
+    '<p class="editorial-links">' + (guides.length ? '<a class="btn btn--ghost" href="/guides/">All guides</a>' : '') +
+    (notes.length ? ' <a class="btn btn--ghost" href="/notes/">Editor\'s notes archive</a>' : '') + '</p></section>';
+}
+function guideLd(g) {
+  const url = `${cfg.siteUrl}/guides/${g.slug}/`;
+  return {
+    '@context': 'https://schema.org',
+    '@graph': [
+      { '@type': 'Article', headline: U.clip(g.title, 110), description: g.description, datePublished: g.date, dateModified: g.updated || g.date, inLanguage: 'en',
+        wordCount: g.words, articleSection: g.category, mainEntityOfPage: { '@type': 'WebPage', '@id': url },
+        author: g.author ? { '@type': 'Person', name: g.author } : authorLd(), publisher: { '@type': 'Organization', name: cfg.siteName, url: cfg.siteUrl } },
+      { '@type': 'BreadcrumbList', itemListElement: [
+        { '@type': 'ListItem', position: 1, name: 'Home', item: cfg.siteUrl + '/' },
+        { '@type': 'ListItem', position: 2, name: 'Guides', item: cfg.siteUrl + '/guides/' },
+        { '@type': 'ListItem', position: 3, name: g.title, item: url }] }
+    ]
+  };
+}
+function guidePageHtml(g) {
+  const toc = g.headings.filter((h) => h.level === 2);
+  const others = guides.filter((x) => x.slug !== g.slug);
+  const related = [...others.filter((x) => x.category === g.category), ...others.filter((x) => x.category !== g.category)].slice(0, 3);
+  const meta = {
+    title: g.title, description: g.description, path: `/guides/${g.slug}/`, page: 'guide', nav: 'guides', robots: 'index,follow', ads: true, api: false,
+    ogType: 'article', published: g.date, modified: g.updated || g.date, jsonld: guideLd(g)
+  };
+  const main = '<main id="main" class="page"><article class="prose article">' +
+    `<nav class="crumbs" aria-label="Breadcrumb"><a href="/">Home</a> / <a href="/guides/">Guides</a> / <span>${esc(g.category)}</span></nav>` +
+    `<h1>${esc(g.title)}</h1><p class="lead">${esc(g.description)}</p>` +
+    `<p class="byline">By ${esc(g.author || cfg.editorName)}. Published <time datetime="${g.date}">${esc(fmtDate(g.date))}</time>.` +
+    (g.updated ? ` Updated <time datetime="${g.updated}">${esc(fmtDate(g.updated))}</time>.` : '') + ` ${g.minutes} min read.</p>` +
+    (toc.length >= 3 ? `<nav class="toc" aria-label="In this guide"><h2>In this guide</h2><ol>${toc.map((h) => `<li><a href="#${h.id}">${esc(h.text)}</a></li>`).join('')}</ol></nav>` : '') +
+    `<div class="article-body">${g.html}</div>` +
+    '<div id="article-end"></div>' +
+    '<aside class="cta-box"><h2>What is on tonight?</h2><p>Every new episode of the day, with air times converted to your time zone.</p>' +
+    '<p><a class="btn btn--solid" href="/">Today\'s schedule</a> <a class="btn btn--ghost" href="/premieres/">Upcoming premieres</a>' +
+    (notes.length ? ' <a class="btn btn--ghost" href="/notes/">Editor\'s notes</a>' : '') + '</p></aside>' +
+    (related.length ? `<section class="related"><h2>More guides</h2>${cardList(related)}</section>` : '') +
+    '</article></main>';
+  return pageHtml(meta, main);
+}
+function guidesIndexHtml() {
+  const cats = [];
+  for (const g of guides) { let c = cats.find((x) => x.name === g.category); if (!c) cats.push(c = { name: g.category, items: [] }); c.items.push(g); }
+  const meta = {
+    title: 'TV guides and explainers', page: 'guides', nav: 'guides', path: '/guides/', robots: 'index,follow', ads: false, api: false,
+    description: `Plain-English guides to US TV schedules, premieres and streaming releases, with picks for what to watch. ${U.plural(guides.length, 'guide')} so far.`
+  };
+  return pageHtml(meta, '<main id="main" class="page"><div class="narrow"><header class="top"><h1>TV guides and explainers</h1>' +
+    '<p class="dek">Plain-English guides to how TV schedules, premieres and streaming releases work, plus picks for what to watch. They are written to stay useful after the day they were published.</p></header>' +
+    cats.map((c, i) => `<section class="cat" aria-labelledby="cat-${i + 1}"><h2 id="cat-${i + 1}">${esc(c.name)}</h2>${cardList(c.items)}</section>`).join('') +
+    '<p class="cat-more">Looking for something for tonight? Start with <a href="/">today\'s schedule</a>' + (notes.length ? ' or the <a href="/notes/">editor\'s notes</a>' : '') + '.</p></div></main>');
+}
+function notesPageHtml() {
+  const dayExists = (d) => hasArchive && fs.existsSync(path.join(OUT, 'day', d, 'index.html'));
+  const meta = {
+    title: "Editor's notes: what to watch each day", page: 'notes', nav: '', path: '/notes/', robots: 'index,follow', ads: false, api: false,
+    description: 'A short note for every day of new TV: what is worth watching tonight, what is unusual in the schedule and what to skip. Newest first.'
+  };
+  const items = notes.map((n) => {
+    const long = T.fmtDateLong(n.date), link = dayExists(n.date);
+    return `<article class="entry" id="n-${n.date}"><h2>${link ? `<a href="/day/${n.date}/">${esc(long)}</a>` : esc(long)}</h2>${n.paras.map((p) => `<p>${esc(p)}</p>`).join('')}` +
+      (link ? `<p class="entry-link"><a href="/day/${n.date}/">See the full schedule for this day</a></p>` : '') + '</article>';
+  }).join('');
+  return pageHtml(meta, '<main id="main" class="page"><div class="narrow"><header class="top"><h1>Editor\'s notes</h1>' +
+    '<p class="dek">A short note for every day of new TV: what is worth watching tonight, what is unusual in the schedule and what to skip. Newest first.</p></header>' +
+    `<div class="entries">${items}</div></div></main>`);
+}
+function feedXml() {
+  const stamp = (d) => d + 'T00:00:00Z';
+  const items = [
+    ...guides.map((g) => ({ url: `${cfg.siteUrl}/guides/${g.slug}/`, title: g.title, updated: g.updated || g.date, summary: g.description, author: g.author || (editorIsRole() ? cfg.siteName : cfg.editorName) })),
+    ...notes.map((n) => ({ url: `${cfg.siteUrl}/notes/#n-${n.date}`, title: `Editor's note for ${fmtDate(n.date)}`, updated: n.date, summary: n.paras[0], author: editorIsRole() ? cfg.siteName : cfg.editorName }))
+  ].sort((a, b) => (a.updated < b.updated ? 1 : a.updated > b.updated ? -1 : a.url < b.url ? -1 : 1)).slice(0, 30);
+  return '<?xml version="1.0" encoding="utf-8"?>\n<feed xmlns="http://www.w3.org/2005/Atom">\n' +
+    `<title>${esc(cfg.siteName)}: guides and editor's notes</title>\n<subtitle>${esc(cfg.tagline)}</subtitle>\n` +
+    `<link href="${esc(cfg.siteUrl)}/feed.xml" rel="self" type="application/atom+xml"/>\n<link href="${esc(cfg.siteUrl)}/" rel="alternate" type="text/html"/>\n` +
+    `<id>${esc(cfg.siteUrl)}/</id>\n<updated>${stamp(items[0].updated)}</updated>\n` +
+    items.map((i) => `<entry><title>${esc(i.title)}</title><link href="${esc(i.url)}"/><id>${esc(i.url)}</id><updated>${stamp(i.updated)}</updated><summary>${esc(i.summary)}</summary><author><name>${esc(i.author)}</name></author></entry>`).join('\n') +
+    '\n</feed>\n';
+}
+/** The prompt templates in prompts/*.txt become a script the /editor/ page loads. */
+function promptsScript() {
+  const out = {};
+  if (fs.existsSync(PROMPTS)) for (const f of fs.readdirSync(PROMPTS).filter((n) => /\.txt$/i.test(n)).sort()) out[f.replace(/\.txt$/i, '')] = fs.readFileSync(path.join(PROMPTS, f), 'utf8').replace(/\r\n?/g, '\n').trim();
+  // the same checks the build applies to published text, so the editor's desk can run them before anything is uploaded
+  const rules = { placeholders: PLACEHOLDERS.map(([re, label]) => [re.source, re.flags, label]), chatbot: CHATBOT_LEFTOVERS.map(([re, label]) => [re.source, re.flags, label]) };
+  // the guides that are already published, so the desk can tell the assistant what exists (no network request needed)
+  const existing = guides.map((g) => ({ title: g.title, path: `/guides/${g.slug}/` }));
+  return 'window.CO_PROMPTS=' + JSON.stringify(out) + ';\nwindow.CO_RULES=' + JSON.stringify(rules) + ';\nwindow.CO_GUIDES=' + JSON.stringify(existing) + ';\n';
+}
+
 /* ------------------------------------------------------------------ main */
 async function main() {
   console.log(`Cold Open build: ${DAILY ? 'daily' : 'compose only'}, output ${path.relative(process.cwd(), OUT) || '.'}`);
@@ -334,6 +467,9 @@ async function main() {
   copyDir(path.join(SRC, 'static'), OUT);
   const client = { siteName: cfg.siteName, siteUrl: cfg.siteUrl, defaultRegion: cfg.defaultRegion, ads: { client: cfg.pub ? 'ca-' + cfg.pub : '', slots: cfg.slots } };
   fs.writeFileSync(path.join(OUT, 'assets/js/config.js'), 'window.CO_CONFIG=' + JSON.stringify(client) + ';\n');
+  loadContent();
+  hasFeed = guides.length > 0 || notes.length > 0;
+  fs.writeFileSync(path.join(OUT, 'assets/js/prompts.js'), promptsScript());
   hashAssets();
 
   const sitemap = [];
@@ -344,12 +480,12 @@ async function main() {
   for (const f of fs.readdirSync(path.join(SRC, 'pages')).filter((n) => n.endsWith('.html')).sort()) {
     const { meta, body } = parsePage(path.join(SRC, 'pages', f));
     let html = template(body);
-    const fill = { h1: 'New TV episodes today', dek: '', note: '', feedattrs: '', feed: '', snapshot: '', sidepicks: '', archivelink: hasArchive ? ' Or browse the <a href="/day/">daily archive</a>.' : '' };
+    const fill = { h1: 'New TV episodes today', dek: '', note: '', feedattrs: '', feed: '', snapshot: '', sidepicks: '', editorial: editorialBlock(), archivelink: hasArchive ? ' Or browse the <a href="/day/">daily archive</a>.' : '' };
     if (meta.page === 'home') {
       if (day) {
         fill.h1 = esc('New TV episodes on ' + T.fmtDateLong(todayEt));
         fill.dek = day.digest.html;
-        fill.note = readNote(todayEt);
+        fill.note = noteAside(todayEt);
         fill.sidepicks = V.picksBox(day.base, day.ctx);
         fill.feedattrs = ` data-built="${built}"`;
         fill.feed = day.rows.length ? day.rail : V.emptyHtml('No new episodes listed for this day');
@@ -386,6 +522,10 @@ async function main() {
     write('day/index.html', archivePageHtml(manifest));
     addMap('/day/', today);
   }
+  for (const g of guides) { write(`guides/${g.slug}/index.html`, guidePageHtml(g)); addMap(`/guides/${g.slug}/`, g.updated || g.date); }
+  if (guides.length) { write('guides/index.html', guidesIndexHtml()); addMap('/guides/', guides.reduce((m, g) => ((g.updated || g.date) > m ? g.updated || g.date : m), '')); }
+  if (notes.length) { write('notes/index.html', notesPageHtml()); addMap('/notes/', notes[0].date); }
+  if (hasFeed) write('feed.xml', feedXml());
   if (hasArchive) {
     for (const d of Object.keys(readJson(path.join(OUT, 'day', 'index.json'), {})).filter(T.isYmd).sort().reverse()) addMap(`/day/${d}/`, d);
   }

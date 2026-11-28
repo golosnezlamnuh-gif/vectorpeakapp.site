@@ -27,8 +27,12 @@ build(path.join(TMP, 'daily'), FX);                             // saved copy of
 build(path.join(TMP, 'ads'), [...FX, '--config', adsCfg]);      // saved copy + AdSense ids
 fs.mkdirSync(path.join(TMP, 'notes')); fs.writeFileSync(path.join(TMP, 'notes/2026-11-10.txt'), 'Start with Nine Rooms tonight.\n\nThen Midnight Ledger.\n');
 build(path.join(TMP, 'note'), [...FX, '--notes', path.join(TMP, 'notes')]); // saved copy + an editor's note for that day
+const FXG = ['--daily', '--fixtures', 'tests/fixtures.mjs', '--date', '2026-12-10']; // by then every shipped guide is published
+build(path.join(TMP, 'guides'), [...FXG, '--config', adsCfg]);  // all guides, the feed and AdSense ids
+build(path.join(TMP, 'plain'), FXG);                            // all guides, no AdSense ids
 
-const servers = { live: await serve(path.join(TMP, 'live')), daily: await serve(path.join(TMP, 'daily')), ads: await serve(path.join(TMP, 'ads')), note: await serve(path.join(TMP, 'note')) };
+const servers = { live: await serve(path.join(TMP, 'live')), daily: await serve(path.join(TMP, 'daily')), ads: await serve(path.join(TMP, 'ads')), note: await serve(path.join(TMP, 'note')),
+  guides: await serve(path.join(TMP, 'guides')), plain: await serve(path.join(TMP, 'plain')) };
 const browser = await chromium.launch();
 
 /* ------------------------------------------------------------------ helpers */
@@ -399,6 +403,290 @@ test('ads on: slots are created with the configured ids, labelled, limited, and 
   await page.waitForSelector('.show-title');
   assert.equal(await page.locator('.ad-slot[data-ad="end"] ins').getAttribute('data-ad-slot'), '3333333333');
   await context.close();
+});
+
+/* ------------------------------------------------------------------ guides, notes archive, feed */
+const GNOW = '2026-12-10T21:42:00-05:00'; // the guides builds are saved copies of 2026-12-10
+const GUIDE_FILES = fs.readdirSync(path.join(ROOT, 'content/guides')).filter((f) => f.endsWith('.md') && !/^readme/i.test(f));
+const GUIDE_SLUGS = GUIDE_FILES.map((f) => f.replace(/\.md$/, ''));
+const guideHeader = (slug) => Object.fromEntries(fs.readFileSync(path.join(ROOT, 'content/guides', slug + '.md'), 'utf8').split('\n---')[0].split('\n').slice(1).map((l) => [l.slice(0, l.indexOf(':')), l.slice(l.indexOf(':') + 1).trim()]));
+
+test('guides: the index lists every published guide by category, every card opens, and the page carries no ads', async () => {
+  const { context, page, log } = await open('guides', '/guides/', { now: GNOW });
+  assert.equal(await text(page, 'h1'), 'TV guides and explainers');
+  assert.equal(await count(page, 'ul.cards > li'), GUIDE_SLUGS.length);
+  for (const slug of GUIDE_SLUGS) assert.equal(await count(page, `a.card-title[href="/guides/${slug}/"]`), 1, slug);
+  assert.ok(await count(page, '.cat > h2') >= 4, 'grouped by category');
+  assert.equal(await count(page, '.ad-slot, ins.adsbygoogle, script[src*=googlesyndication]'), 0, 'no ads on the guides index');
+  for (const slug of GUIDE_SLUGS) {
+    const r = await page.request.get(`${servers.guides.url}/guides/${slug}/`);
+    assert.equal(r.status(), 200, slug);
+    assert.ok((await r.text()).includes(`<h1>`), slug);
+  }
+  assert.equal((await page.request.get(servers.guides.url + '/guides/no-such-guide/')).status(), 404);
+  noErrors(log); await context.close();
+});
+
+test('guide page: title, byline, contents, table, related guides and structured data are all there and work', async () => {
+  const slug = 'us-tv-ratings-explained', head = guideHeader(slug);
+  const { context, page, log } = await open('guides', `/guides/${slug}/`, { now: GNOW });
+  assert.equal(await count(page, 'h1'), 1);
+  assert.equal(await text(page, 'h1'), head.title);
+  assert.equal(await page.title(), head.title + ' | Cold Open');
+  const [yy, mm, dd] = head.date.split('-').map(Number), longDate = `${['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'][mm - 1]} ${dd}, ${yy}`;
+  assert.match(await text(page, '.byline'), new RegExp(`^By the Cold Open editor\\. Published ${longDate}\\. \\d+ min read\\.$`));
+  assert.equal(await page.locator('.mast .nav a[aria-current="page"]').innerText(), 'Guides');
+  assert.equal(await count(page, 'nav.crumbs a'), 2);
+  const ids = await page.locator('nav.toc li a').evaluateAll((as) => as.map((a) => a.getAttribute('href').slice(1)));
+  assert.ok(ids.length >= 5, 'contents: ' + ids.length);
+  for (const id of ids) assert.equal(await count(page, `[id="${id}"]`), 1, 'target of the contents link: ' + id);
+  await page.locator('nav.toc li a').nth(2).click();
+  assert.equal(await page.evaluate(() => location.hash), '#' + ids[2]);
+  const top = await page.locator(`[id="${ids[2]}"]`).evaluate((el) => el.getBoundingClientRect().top);
+  assert.ok(top >= -2 && top < 300, 'the section is in view after clicking its contents link: ' + top);
+  assert.equal(await count(page, '.table-wrap > table th[scope="col"]'), 2);
+  assert.ok(await count(page, '.table-wrap tbody tr') >= 7, 'the ratings table has its rows');
+  const related = await page.locator('.related a.card-title').evaluateAll((as) => as.map((a) => a.getAttribute('href')));
+  assert.equal(related.length, 3);
+  assert.ok(!related.includes(`/guides/${slug}/`) && related.every((h) => GUIDE_SLUGS.includes(h.split('/')[2])), 'related guides are other, existing guides');
+  const ld = await page.evaluate(() => JSON.parse(document.querySelector('script[type="application/ld+json"]').textContent));
+  const art = ld['@graph'].find((n) => n['@type'] === 'Article');
+  assert.equal(art.headline, head.title); assert.equal(art.datePublished, head.date); assert.ok(art.wordCount > 600);
+  assert.equal(art.author['@type'], 'Organization', 'a role such as "the Cold Open editor" is not described as a person');
+  assert.equal(ld['@graph'].find((n) => n['@type'] === 'BreadcrumbList').itemListElement.length, 3);
+  assert.equal(await page.locator('link[rel="canonical"]').getAttribute('href'), `https://tv.test.example/guides/${slug}/`);
+  assert.equal(await page.locator('link[rel="alternate"][type="application/atom+xml"]').getAttribute('href'), '/feed.xml');
+  assert.equal(await count(page, 'a[href^="/"]:not([href^="//"])'), await page.locator('a[href^="/"]:not([href^="//"])').count());
+  const hrefs = await page.locator('main a[href^="/"]').evaluateAll((as) => [...new Set(as.map((a) => a.getAttribute('href').split('#')[0]))]);
+  for (const h of hrefs) assert.ok([200, 308].includes((await page.request.get(servers.guides.url + h, { maxRedirects: 0 })).status()), 'internal link works: ' + h);
+  noErrors(log); await context.close();
+});
+
+test('guide page: the ad slot exists only when configured, sits after the article, and never appears without ids', async () => {
+  const url = '/guides/us-tv-ratings-explained/';
+  let c = await open('guides', url, { now: GNOW });
+  await c.page.waitForSelector('.ad-slot[data-ad="end"] ins.adsbygoogle');
+  assert.equal(await c.page.locator('.ad-slot ins').getAttribute('data-ad-slot'), '3333333333');
+  assert.equal(await c.page.locator('.ad-slot ins').getAttribute('data-ad-client'), 'ca-' + PUB);
+  assert.equal(await count(c.page, '.ad-slot'), 1);
+  assert.equal(await c.page.locator('.ad-slot').evaluate((n) => n.previousElementSibling && n.previousElementSibling.id), 'article-end');
+  assert.equal(await c.page.locator('.ad-slot .ad-label').innerText(), 'Advertisement');
+  assert.ok(c.net.calls.some((x) => /^AD https:\/\/pagead2\.googlesyndication\.com\/pagead\/js\/adsbygoogle\.js\?client=ca-pub-1234567890123456/.test(x)));
+  assert.equal(await c.page.evaluate(() => window.adsbygoogle.length), 1, 'one request for one slot');
+  assert.equal(await count(c.page, '.article-body .ad-slot, .article-body ins'), 0, 'nothing is injected inside the text');
+  noErrors(c.log); await c.context.close();
+  c = await open('plain', url, { now: GNOW });
+  assert.equal(await count(c.page, '.ad-slot, ins.adsbygoogle, script[src*=googlesyndication]'), 0, 'no ad code and no empty box without ids');
+  await c.page.goto(servers.plain.url + url + '?adpreview=1');
+  await c.page.waitForSelector('.ad-slot.is-preview');
+  assert.equal(await count(c.page, '.ad-slot'), 1);
+  assert.equal(c.net.calls.filter((x) => x.startsWith('AD ')).length, 0, 'the preview makes no ad request');
+  await c.context.close();
+});
+
+test('home: the "From the editor" block shows the three newest guides, and a site without guides or notes shows nothing empty', async () => {
+  const { context, page, log } = await open('guides', '/', { now: GNOW });
+  await railReady(page, '2026-12-10');
+  assert.equal(await text(page, '#ed-h'), 'From the editor');
+  const shown = await page.locator('.editorial a.card-title').evaluateAll((as) => as.map((a) => a.getAttribute('href').split('/')[2]));
+  const newest = GUIDE_SLUGS.map((s) => [guideHeader(s).date, s]).sort((a, b) => (a[0] < b[0] ? 1 : a[0] > b[0] ? -1 : a[1] < b[1] ? -1 : 1)).slice(0, 3).map((x) => x[1]);
+  assert.deepEqual(shown, newest);
+  assert.equal(await count(page, '.editorial a[href="/guides/"]'), 1);
+  assert.equal(await count(page, '.editorial a[href="/notes/"]'), 0, 'no notes yet, so no link to an empty archive');
+  assert.equal(await count(page, '.mast .nav a[href="/guides/"]'), 1);
+  noErrors(log); await context.close();
+  const d = await open('daily', '/');
+  await railReady(d.page, '2026-11-10');
+  assert.equal(await count(d.page, '#ed-h, .editorial, a[href="/guides/"], a[href="/notes/"], link[type="application/atom+xml"]'), 0);
+  for (const u of ['/guides/', '/notes/', '/feed.xml']) assert.equal((await d.page.request.get(servers.daily.url + u)).status(), 404, u + ' does not exist yet');
+  const sm = await (await d.page.request.get(servers.daily.url + '/sitemap.xml')).text();
+  assert.ok(!/\/guides\/|\/notes\//.test(sm), 'the sitemap lists no empty sections');
+  await d.context.close();
+});
+
+test("notes archive and feed: a note appears on /notes/ and in the Atom feed, and links to its day", async () => {
+  const { context, page, log } = await open('note', '/notes/');
+  assert.equal(await text(page, 'h1'), "Editor's notes");
+  assert.equal(await count(page, 'article.entry'), 1);
+  assert.equal(await text(page, 'article.entry h2'), 'Tuesday, November 10, 2026');
+  assert.match(await text(page, 'article.entry'), /Start with Nine Rooms tonight\.[\s\S]*Then Midnight Ledger\./);
+  assert.equal(await page.locator('article.entry h2 a').getAttribute('href'), '/day/2026-11-10/');
+  assert.equal((await page.request.get(servers.note.url + '/day/2026-11-10/')).status(), 200);
+  const feed = await page.evaluate(async () => {
+    const r = await fetch('/feed.xml'), x = new DOMParser().parseFromString(await r.text(), 'application/xml');
+    return { status: r.status, broken: !!x.querySelector('parsererror'), root: x.documentElement.localName, entries: [...x.querySelectorAll('entry')].map((e) => ({ title: e.querySelector('title').textContent, link: e.querySelector('link').getAttribute('href'), author: e.querySelector('author name').textContent, summary: e.querySelector('summary').textContent })) };
+  });
+  assert.deepEqual([feed.status, feed.broken, feed.root, feed.entries.length], [200, false, 'feed', 1]);
+  assert.deepEqual(feed.entries[0], { title: "Editor's note for November 10, 2026", link: 'https://example.com/notes/#n-2026-11-10', author: 'Cold Open', summary: 'Start with Nine Rooms tonight.' });
+  await page.goto(servers.note.url + '/');
+  await railReady(page, '2026-11-10');
+  assert.equal(await count(page, '.editorial a[href="/notes/"]'), 1);
+  assert.equal(await count(page, '.editorial ul.cards'), 0, 'no guides yet, so no empty list of cards');
+  assert.equal(await page.locator('link[rel="alternate"][type="application/atom+xml"]').getAttribute('href'), '/feed.xml');
+  noErrors(log); await context.close();
+});
+
+test('guides and notes pages: no sideways scrolling, nameless controls or missing alt text at phone, tablet and desktop widths', async () => {
+  const sets = [['guides', ['/', '/guides/', '/guides/us-tv-ratings-explained/', '/guides/tv-terms-glossary/', '/guides/how-to-read-a-tv-schedule/', '/editorial-policy/', '/about/', '/editor/']], ['note', ['/notes/', '/']]];
+  for (const width of [320, 390, 768, 1280]) for (const [site, pages] of sets) {
+    const { context, page } = await open(site, '/about/', { now: site === 'guides' ? GNOW : undefined, viewport: { width, height: 800 }, mobile: width < 700 });
+    for (const url of pages) {
+      await page.goto(servers[site].url + url, { waitUntil: 'load' });
+      await page.waitForTimeout(url === '/' ? 600 : 100);
+      const r = await page.evaluate(() => ({
+        over: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+        nameless: [...document.querySelectorAll('button, a[href], input, select, textarea')].filter((el) => !(el.innerText || '').trim() && !el.getAttribute('aria-label') && !el.getAttribute('title') && !(el.labels && el.labels.length) && !el.querySelector('img[alt]:not([alt=""])') && el.type !== 'hidden' && !el.closest('[aria-hidden="true"]') && el.tabIndex >= 0).map((el) => el.outerHTML.slice(0, 80)),
+        noAlt: document.querySelectorAll('img:not([alt])').length,
+        tooWide: [...document.querySelectorAll('.table-wrap')].filter((w) => w.scrollWidth > w.clientWidth && getComputedStyle(w).overflowX === 'visible').length
+      }));
+      assert.ok(r.over <= 0, `${site} ${url} at ${width}px scrolls sideways by ${r.over}px`);
+      assert.deepEqual(r.nameless, [], `${url}: controls without a name`);
+      assert.equal(r.noAlt, 0, `${url}: images without alt`);
+      assert.equal(r.tooWide, 0, `${url}: a table that cannot scroll inside its box`);
+    }
+    await context.close();
+  }
+});
+
+/* ------------------------------------------------------------------ the editor's desk */
+const reportHas = (page, re) => page.waitForFunction(([src, flags]) => new RegExp(src, flags).test(document.querySelector('#report').textContent), [re.source, re.flags]);
+const DESK = { setup: async ({ context }) => { await context.addInitScript(() => { window.CO_DESK_DELAY = 0; }); } };
+const lorem = (n, seed) => Array.from({ length: n }, (_, i) => `${seed}${(i * 7919) % 997}`).join(' ');
+const NOTE = "Hello, Tuesday viewers! Nine Rooms opens on Netflix at 3 a.m. ET, and it is the one new series I would circle today.\n\nIf you stay up for prime time, Midnight Ledger on HBO at 9 p.m. ET and Salt & Ash on FX at 10 p.m. ET make a good double bill, because both start a new season tonight.\n\nHollow Season returns on Max, but with two episodes already out it can wait for the weekend, and Orchard Street is a gentle choice if you only have thirty minutes before bed.\n\nThat's the schedule. See you tomorrow, and thanks for reading.";
+const GUIDE = `---\ntitle: How to read a TV schedule\ndescription: A plain-English walk through time zones, premiere labels and episode numbers, so a TV listing stops being a puzzle for any viewer.\ndate: 2026-11-01\ncategory: Schedule basics\n---\n\nIntro paragraph ${lorem(70, 'i')}.\n\n## First\n\n${lorem(210, 'a')}.\n\n## Second\n\n${lorem(210, 'b')}.\n\n## Third\n\n${lorem(210, 'c')}.\n`;
+
+test("editor's desk: loads the day and the week from the schedule and puts the real facts into the prompt", async () => {
+  const { context, page, net, log } = await open('daily', '/editor/', DESK);
+  assert.equal(await page.locator('#d-date').inputValue(), '2026-11-10');
+  assert.equal(await page.locator('meta[name="robots"]').getAttribute('content'), 'noindex,nofollow');
+  assert.deepEqual(await page.locator('#tpl option').evaluateAll((os) => os.map((o) => o.value)), ['note', 'week', 'ideas', 'guide-outline', 'guide', 'factcheck', 'polish']);
+  assert.match(await text(page, '#prompt-meta'), /Load the day in step 1 first/);
+  assert.match(await page.locator('#prompt').inputValue(), /\{\{FACTS\}\}/, 'the prompt shows what is still missing');
+  assert.equal(apiCalls(net).length, 0, 'nothing is requested until the button is pressed');
+  await page.click('#load-day');
+  await page.waitForFunction(() => document.querySelector('#facts-day').value.length > 100);
+  assert.equal(await text(page, '#d-status'), 'Loaded 2026-11-10: 26 episodes from 24 shows, 5 top picks.');
+  assert.deepEqual(apiCalls(net), ['/schedule?country=US&date=2026-11-10', '/schedule/web?date=2026-11-10&country=US', '/schedule/web?date=2026-11-10&country=']);
+  const facts = await page.locator('#facts-day').inputValue();
+  assert.match(facts, /^DATE: Tuesday, November 10, 2026[\s\S]*Nine Rooms[\s\S]*3:00 AM ET/);
+  const prompt = await page.locator('#prompt').inputValue();
+  assert.ok(prompt.includes(facts), 'the facts are inside the prompt');
+  assert.ok(prompt.includes('Write the editor\'s note for Tuesday, November 10, 2026.'));
+  assert.ok(!/\{\{/.test(prompt), 'no unfilled field is left in the prompt');
+  assert.match(await text(page, '#prompt-meta'), /characters, ready to copy\. Adding your own take/);
+  await page.fill('#fields textarea[data-key="MY_TAKE"]', 'I always watch the cold open twice.');
+  assert.match(await page.locator('#prompt').inputValue(), /I always watch the cold open twice\./);
+  await page.selectOption('#tpl', 'week');
+  assert.match(await text(page, '#prompt-meta'), /Load the week in step 1 first/);
+  await page.click('#load-week');
+  await page.waitForFunction(() => /^Loaded 7 days/.test(document.querySelector('#d-status').textContent), null, { timeout: 30000 });
+  assert.equal(await text(page, '#d-status'), 'Loaded 7 days from 2026-11-10: 176 episodes, 3 new series, 4 returning seasons.');
+  assert.equal(apiCalls(net).length, 3 + 21, 'three requests per day');
+  assert.equal(await page.locator('#kind').inputValue(), 'guide', 'the weekly article is a guide file');
+  assert.match(await page.locator('#prompt').inputValue(), /WEEK: Tuesday, November 10, 2026 to Monday, November 16, 2026/);
+  assert.equal(await page.locator('#load-day').isEnabled(), true);
+  await page.selectOption('#tpl', 'polish');
+  assert.match(await page.locator('#fields label:has(textarea[data-key="MY_TAKE"])').evaluate((n) => n.firstChild.textContent), /^Your voice/, 'the same field is explained for what it means in this prompt');
+  await page.selectOption('#tpl', 'ideas');
+  assert.match(await page.locator('#fields label:has(textarea[data-key="MY_TAKE"])').evaluate((n) => n.firstChild.textContent), /^Your interests and limits/);
+  assert.equal(await count(page, 'a[href="/editor/"]'), 0, 'the desk is not linked from the page it is on');
+  noErrors(log); await context.close();
+});
+
+test("editor's desk: checks a note and a guide with the build's rules, names the file, downloads it and builds the GitHub link", async () => {
+  const { context, page, log } = await open('daily', '/editor/', DESK);
+  await context.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: servers.daily.url });
+  await page.fill('#draft', NOTE);
+  await reportHas(page, /Ready to upload/);
+  assert.equal(await text(page, '#report .desk-verdict'), 'Ready to upload.');
+  assert.equal(await text(page, '#file-name'), 'Save it as content/notes/2026-11-10.txt');
+  assert.equal(await page.locator('#gh-link').isHidden(), true, 'no GitHub link until a repository is typed');
+  await page.fill('#n-date', '2026-11-12');
+  await page.dispatchEvent('#n-date', 'change');
+  assert.equal(await text(page, '#file-name'), 'Save it as content/notes/2026-11-12.txt');
+  await page.fill('#repo', 'someone/their-site');
+  assert.equal(await page.locator('#gh-link').getAttribute('href'), 'https://github.com/someone/their-site/new/main/content/notes?filename=2026-11-12.txt');
+  await page.fill('#repo', 'not a repo');
+  assert.equal(await page.locator('#gh-link').isHidden(), true, 'a malformed repository name gives no link');
+  await page.fill('#repo', 'https://github.com/someone/their-site/');
+  assert.match(await page.locator('#gh-link').getAttribute('href'), /^https:\/\/github\.com\/someone\/their-site\/new\/main\/content\/notes\?filename=/, 'a pasted address works too');
+  await page.fill('#repo', 'someone/their-site');
+  await page.fill('#draft', NOTE + '\n\nOne more thing: [VERIFY: the finale date].');
+  await reportHas(page, /unresolved \[VERIFY/);
+  assert.equal(await text(page, '#report .desk-verdict'), 'Not ready: fix the red items first.');
+  assert.match(await text(page, '#report li.bad'), /will NOT publish this note/);
+  await page.fill('#draft', "Sure! Here's your note:\n\n" + NOTE);
+  await reportHas(page, /chatbot/i);
+  assert.match(await text(page, '#report li.bad'), /chatbot/i);
+  await page.fill('#draft', 'Too short.');
+  await reportHas(page, /Will be published/);
+  assert.equal(await text(page, '#report .desk-verdict'), 'Will be published. Read the orange items first: they are about quality.');
+  // a guide: file name from the title, GitHub link into the guides folder, a download that matches what was pasted
+  await page.selectOption('#kind', 'guide');
+  assert.equal(await page.locator('#n-date-wrap').isHidden(), true);
+  await page.fill('#draft', GUIDE);
+  await reportHas(page, /Ready to upload/);
+  assert.equal(await text(page, '#report .desk-verdict'), 'Ready to upload.');
+  assert.equal(await text(page, '#file-name'), 'Save it as content/guides/how-to-read-a-tv-schedule.md');
+  assert.equal(await page.locator('#gh-link').getAttribute('href'), 'https://github.com/someone/their-site/new/main/content/guides?filename=how-to-read-a-tv-schedule.md');
+  const [dl] = await Promise.all([page.waitForEvent('download'), page.click('#download')]);
+  assert.equal(dl.suggestedFilename(), 'how-to-read-a-tv-schedule.md');
+  assert.equal(fs.readFileSync(await dl.path(), 'utf8'), GUIDE.trim() + '\n');
+  await page.click('#copy-draft');
+  await page.waitForFunction(() => /Text copied/.test(document.querySelector('#toast').textContent));
+  assert.equal(await page.evaluate(() => navigator.clipboard.readText()), GUIDE.trim() + '\n');
+  await page.click('#copy-name');
+  assert.equal(await page.evaluate(() => navigator.clipboard.readText()), 'how-to-read-a-tv-schedule.md');
+  await page.fill('#draft', GUIDE.replace('## Second', '## Second\n\nTODO: add a source here.\n'));
+  await reportHas(page, /TODO/);
+  assert.match(await text(page, '#report li.bad'), /TODO/);
+  await page.fill('#draft', GUIDE.replace('2026-11-01', '2030-01-01'));
+  await page.waitForFunction(() => /stays hidden until that day/.test(document.querySelector('#report').textContent));
+  await page.fill('#draft', '<img src=x onerror="window.__xss=1"> ' + GUIDE.replace('Intro', '[bad](javascript:window.__xss=2) Intro'));
+  await page.waitForFunction(() => /become plain text/.test(document.querySelector('#report').textContent));
+  assert.equal(await page.evaluate(() => window.__xss), undefined);
+  assert.equal(await count(page, '#report img, #report script, #report a'), 0, 'the report shows text, never markup from the draft');
+  // the repository is remembered in this browser
+  await page.reload();
+  assert.equal(await page.locator('#repo').inputValue(), 'someone/their-site');
+  noErrors(log); await context.close();
+});
+
+test("editor's desk: explains a TVmaze outage in plain words, keeps working and recovers; also works with browser storage blocked", async () => {
+  const failures = [{ match: /^\/schedule\?country=US/, status: 429, times: 99, headers: { 'retry-after': '0', 'access-control-expose-headers': 'retry-after' } }];
+  const c = await open('daily', '/editor/', { ...DESK, failures, blockStorage: true });
+  const { page } = c;
+  await page.click('#load-day');
+  await page.waitForFunction(() => /busy/.test(document.querySelector('#d-status').textContent), null, { timeout: 20000 });
+  assert.equal(await text(page, '#d-status'), 'TVmaze is busy right now (HTTP 429). Try again in a minute.');
+  assert.equal(await page.locator('#d-status').evaluate((n) => n.classList.contains('is-bad')), true);
+  assert.equal(await page.locator('#load-day').isEnabled(), true, 'the buttons come back');
+  assert.equal(await page.locator('#facts-day').inputValue(), '', 'no half-loaded facts are left behind');
+  assert.match(await text(page, '#prompt-meta'), /Load the day in step 1 first/);
+  c.net.state.failures.length = 0; // the outage is over
+  await page.click('#load-day');
+  await page.waitForFunction(() => /^Loaded 2026-11-10/.test(document.querySelector('#d-status').textContent), null, { timeout: 20000 });
+  assert.equal(await page.locator('#d-status').evaluate((n) => n.classList.contains('is-bad')), false);
+  await page.fill('#repo', 'someone/their-site');            // storage is blocked: nothing may throw
+  await page.fill('#draft', NOTE);
+  await reportHas(page, /Ready to upload/);
+  noErrors(c.log, [/status of 429/]); await c.context.close();
+});
+
+test("editor's desk: lists the guides that already exist for the assistant, and says so when there are none", async () => {
+  const g = await open('plain', '/editor/', { ...DESK, now: GNOW });
+  await g.page.selectOption('#tpl', 'guide-outline');
+  const ta = g.page.locator('#fields textarea[data-key="EXISTING_GUIDES"]');
+  await g.page.waitForFunction(() => { const t = document.querySelector('#fields textarea[data-key="EXISTING_GUIDES"]'); return t && /\/guides\//.test(t.value); });
+  const lines = (await ta.inputValue()).split('\n');
+  assert.equal(lines.length, GUIDE_SLUGS.length);
+  for (const l of lines) assert.match(l, /^.+ \(\/guides\/[a-z0-9-]+\/\)$/);
+  assert.ok((await g.page.locator('#prompt').inputValue()).includes(lines[0]), 'the list is inside the prompt');
+  await g.context.close();
+  const n = await open('daily', '/editor/', DESK);
+  await n.page.selectOption('#tpl', 'guide-outline');
+  await n.page.waitForFunction(() => { const t = document.querySelector('#fields textarea[data-key="EXISTING_GUIDES"]'); return t && t.value === '(none yet)'; });
+  await n.context.close();
 });
 
 /* ------------------------------------------------------------------ security */
